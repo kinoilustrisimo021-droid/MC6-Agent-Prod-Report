@@ -1,7 +1,10 @@
 import io
 import re
+import tempfile
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pandas as pd
 import polars as pl
@@ -102,6 +105,8 @@ HIGH_KEPT_THRESHOLD = 0.60
 LOW_RPC_THRESHOLD = 0.20
 LOW_PTP_THRESHOLD = 0.35
 LOW_KEPT_THRESHOLD = 0.50
+MAX_PREVIEW_ROWS = 300
+ACTIVITY_READ_WORKERS = 2
 
 STATUS_RPC_KEYWORDS = ["RPC", "POS CLIENT", "POSITIVE CLIENT"]
 STATUS_KEPT_KEYWORDS = ["CONFIRMED", "PAID", "PAYMENT"]
@@ -215,12 +220,14 @@ def read_table_selected(file_name, file_bytes, aliases_map, preview_rows=None):
 
 
 def read_uploaded_file(uploaded_file):
-    return uploaded_file.name, uploaded_file.getvalue()
+    uploaded_file.seek(0)
+    return uploaded_file.name, uploaded_file.read()
 
 
 def load_activity_logs_fast(uploaded_files):
     payloads = [read_uploaded_file(file) for file in uploaded_files]
-    with ThreadPoolExecutor(max_workers=min(4, max(1, len(payloads)))) as pool:
+    # Cap parallel file reads to reduce peak memory usage on Streamlit Cloud.
+    with ThreadPoolExecutor(max_workers=min(ACTIVITY_READ_WORKERS, max(1, len(payloads)))) as pool:
         frames = list(pool.map(lambda item: read_table_selected(item[0], item[1], ACTIVITY_REQUIRED_ALIASES), payloads))
     if not frames:
         raise ValueError("Please upload at least one activity log file.")
@@ -898,6 +905,14 @@ def build_workbook_bytes(export_rows, dates, summary_long):
     return output
 
 
+def save_output_to_tempfile(output_bytes):
+    temp_dir = Path(tempfile.gettempdir()) / "agent_prod_report"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    file_path = temp_dir / f"{uuid.uuid4().hex}.xlsx"
+    file_path.write_bytes(output_bytes)
+    return str(file_path)
+
+
 def preview_df(uploaded_file, aliases_map, rows=5):
     file_name, file_bytes = read_uploaded_file(uploaded_file)
     return read_table_selected(file_name, file_bytes, aliases_map, preview_rows=rows)
@@ -1002,12 +1017,15 @@ if st.button("Process Report", type="primary", disabled=not can_process):
             output = build_workbook_bytes(export_rows, dates, summary_long)
             log(f"Build XLSX output: {time.perf_counter() - t0:.2f}s")
 
+            output_bytes = output.getvalue()
+            output_path = save_output_to_tempfile(output_bytes)
             total_elapsed = time.perf_counter() - total_start
             log(f"Total elapsed: {total_elapsed:.2f}s")
             st.session_state.agent_prod_result = {
                 "message": f"Done. Built {len(export_rows):,} agent row(s) across {len(dates):,} date block(s) in {total_elapsed:.2f}s.",
-                "output": output.getvalue(),
-                "preview": summary_long.to_pandas(),
+                "output_path": output_path,
+                "preview": summary_long.head(MAX_PREVIEW_ROWS).to_pandas(),
+                "preview_note": f"Showing first {min(MAX_PREVIEW_ROWS, summary_long.height):,} row(s) of {summary_long.height:,} total row(s).",
                 "logs": "\n".join(logs),
             }
 
@@ -1028,13 +1046,20 @@ if result:
         st.error(f"Error: {result['error']}")
     else:
         st.success(result["message"])
-        st.download_button(
-            "Download Summary Report",
-            data=result["output"],
-            file_name="agent_production_summary.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        output_path = result.get("output_path")
+        if output_path and Path(output_path).exists():
+            with open(output_path, "rb") as f:
+                st.download_button(
+                    "Download Summary Report",
+                    data=f,
+                    file_name="agent_production_summary.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+        else:
+            st.warning("Download file is no longer available. Please process the report again.")
         with st.expander("Preview: Final Summary Data", expanded=True):
+            if result.get("preview_note"):
+                st.caption(result["preview_note"])
             st.dataframe(result["preview"], width="stretch")
 
     with st.expander("Processing Log", expanded=True):
