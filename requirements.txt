@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+polars
+duckdb
+mysql-connector-python
+pydantic
+xlsxwriter
+python-calamine
+fastexcel
+fastapi
+pandas
+selenium
+webdriver-manager
+psutil
