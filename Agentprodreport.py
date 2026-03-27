@@ -859,26 +859,26 @@ with st.container():
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="activity_files",
-            help="Multiple files allowed. CSV is fastest. Only the 8 required activity columns are read for speed.",
+            help="Multiple files allowed. CSV is fastest. Only the 8 required activity columns are read for speed. Max 500MB per file.",
         )
         cms_reference_file = st.file_uploader(
             "2. Upload Agent Reference to be Include in Report",
             type=["xlsx", "xls", "csv"],
             key="cms_reference_file",
-            help="Columns: Name, CMS User, Placement",
+            help="Columns: Name, CMS User, Placement. Max 500MB.",
         )
     with col2:
         target_reference_file = st.file_uploader(
             "3. Upload target reference",
             type=["xlsx", "xls", "csv"],
             key="target_reference_file",
-            help="Columns: Placement, Connected Calls Target, RPC Target, RPC OB Target, PTP Target, PTP OB Target, Kept Target, KEPT OB Target",
+            help="Columns: Placement, Connected Calls Target, RPC Target, RPC OB Target, PTP Target, PTP OB Target, Kept Target, KEPT OB Target. Max 500MB.",
         )
         old_ic_reference_file = st.file_uploader(
             "4. Upload Masterfile reference",
             type=["xlsx", "xls", "csv"],
             key="old_ic_reference_file",
-            help="Columns: Old IC, Placement, Principal",
+            help="Columns: Old IC, Placement, Principal. Max 500MB.",
         )
 
 
