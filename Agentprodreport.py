@@ -96,6 +96,13 @@ PERCENTAGE_COLS = {
     "KEPT OB %": ("KEPT OB", "KEPT OB Target"),
 }
 
+HIGH_RPC_THRESHOLD = 0.25
+HIGH_PTP_THRESHOLD = 0.50
+HIGH_KEPT_THRESHOLD = 0.60
+LOW_RPC_THRESHOLD = 0.20
+LOW_PTP_THRESHOLD = 0.35
+LOW_KEPT_THRESHOLD = 0.50
+
 STATUS_RPC_KEYWORDS = ["RPC", "POS CLIENT", "POSITIVE CLIENT"]
 STATUS_KEPT_KEYWORDS = ["CONFIRMED", "PAID", "PAYMENT"]
 PTP_EXCLUSIONS = [
@@ -772,50 +779,82 @@ def build_workbook_bytes(export_rows, dates, summary_long):
                     else:
                         monthly_ws.write_number(row_idx, col_idx, int(value or 0), fmt_count)
 
-            top_mask = (pl.col("PTP Rate").fill_null(0.0) >= 0.50) & (pl.col("KEPT Rate").fill_null(0.0) >= 0.60)
-            low_mask = pl.col("KEPT Rate").fill_null(0.0) < 0.50
-            top_performers = month_block.filter(top_mask).sort(["KEPT Rate", "PTP Rate"], descending=[True, True]).to_dicts()
-            low_performers = month_block.filter(low_mask).sort(["KEPT Rate", "PTP Rate"], descending=[False, False]).to_dicts()
+            high_mask = (
+                (pl.col("RPC Rate").fill_null(0.0) >= HIGH_RPC_THRESHOLD)
+                & (pl.col("PTP Rate").fill_null(0.0) >= HIGH_PTP_THRESHOLD)
+                & (pl.col("KEPT Rate").fill_null(0.0) >= HIGH_KEPT_THRESHOLD)
+            )
+            low_mask = (
+                (pl.col("RPC Rate").fill_null(0.0) < LOW_RPC_THRESHOLD)
+                | (pl.col("PTP Rate").fill_null(0.0) < LOW_PTP_THRESHOLD)
+                | (pl.col("KEPT Rate").fill_null(0.0) < LOW_KEPT_THRESHOLD)
+            )
+            middle_mask = (~high_mask) & (~low_mask)
+
+            high_performers = month_block.filter(high_mask).sort(["KEPT Rate", "PTP Rate", "RPC Rate"], descending=[True, True, True]).to_dicts()
+            middle_performers = month_block.filter(middle_mask).sort(["KEPT Rate", "PTP Rate", "RPC Rate"], descending=[True, True, True]).to_dicts()
+            low_performers = month_block.filter(low_mask).sort(["KEPT Rate", "PTP Rate", "RPC Rate"], descending=[False, False, False]).to_dicts()
 
             total_agents = max(len(month_rows), 1)
-            top_count = len(top_performers)
+            top_count = len(high_performers)
             low_count = len(low_performers)
-            middle_count = max(total_agents - top_count - low_count, 0)
+            middle_count = len(middle_performers)
             summary_lines, action_plan_rows = build_month_ai_notes(month_rows, top_count, middle_count, low_count)
 
             insights_row = start_row + len(row_labels) + 6
 
-            monthly_ws.merge_range(insights_row, 0, insights_row, 2, "Top Performers (Strong PTP + Strong KEPT)", fmt_section)
+            monthly_ws.merge_range(insights_row, 0, insights_row, 3, "High Performers", fmt_section)
             monthly_ws.write(insights_row + 1, 0, "CMS User", fmt_subheader)
-            monthly_ws.write(insights_row + 1, 1, "PTP Rate", fmt_subheader)
-            monthly_ws.write(insights_row + 1, 2, "KEPT Rate", fmt_subheader)
+            monthly_ws.write(insights_row + 1, 1, "RPC Rate", fmt_subheader)
+            monthly_ws.write(insights_row + 1, 2, "PTP Rate", fmt_subheader)
+            monthly_ws.write(insights_row + 1, 3, "KEPT Rate", fmt_subheader)
             current_row = insights_row + 2
-            for row in top_performers:
+            for row in high_performers:
                 monthly_ws.write(current_row, 0, row["CMS User"], fmt_left)
-                monthly_ws.write_number(current_row, 1, float(row.get("PTP Rate") or 0.0), fmt_pct)
-                monthly_ws.write_number(current_row, 2, float(row.get("KEPT Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 1, float(row.get("RPC Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 2, float(row.get("PTP Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 3, float(row.get("KEPT Rate") or 0.0), fmt_pct)
                 current_row += 1
-            if not top_performers:
-                monthly_ws.merge_range(current_row, 0, current_row, 2, "No agents met the current top-performer thresholds.", fmt_text)
+            if not high_performers:
+                monthly_ws.merge_range(current_row, 0, current_row, 3, "No agents met the current high-performer thresholds.", fmt_text)
+                current_row += 1
+
+            middle_start_row = current_row + 2
+            monthly_ws.merge_range(middle_start_row, 0, middle_start_row, 3, "Mid Performers", fmt_section)
+            monthly_ws.write(middle_start_row + 1, 0, "CMS User", fmt_subheader)
+            monthly_ws.write(middle_start_row + 1, 1, "RPC Rate", fmt_subheader)
+            monthly_ws.write(middle_start_row + 1, 2, "PTP Rate", fmt_subheader)
+            monthly_ws.write(middle_start_row + 1, 3, "KEPT Rate", fmt_subheader)
+            current_row = middle_start_row + 2
+            for row in middle_performers:
+                monthly_ws.write(current_row, 0, row["CMS User"], fmt_left)
+                monthly_ws.write_number(current_row, 1, float(row.get("RPC Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 2, float(row.get("PTP Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 3, float(row.get("KEPT Rate") or 0.0), fmt_pct)
+                current_row += 1
+            if not middle_performers:
+                monthly_ws.merge_range(current_row, 0, current_row, 3, "No agents fell into the middle-performer range.", fmt_text)
                 current_row += 1
 
             low_start_row = current_row + 2
-            monthly_ws.merge_range(low_start_row, 0, low_start_row, 2, "Low Performers (Low KEPT Conversion)", fmt_section)
+            monthly_ws.merge_range(low_start_row, 0, low_start_row, 3, "Low Performers", fmt_section)
             monthly_ws.write(low_start_row + 1, 0, "CMS User", fmt_subheader)
-            monthly_ws.write(low_start_row + 1, 1, "PTP Rate", fmt_subheader)
-            monthly_ws.write(low_start_row + 1, 2, "KEPT Rate", fmt_subheader)
+            monthly_ws.write(low_start_row + 1, 1, "RPC Rate", fmt_subheader)
+            monthly_ws.write(low_start_row + 1, 2, "PTP Rate", fmt_subheader)
+            monthly_ws.write(low_start_row + 1, 3, "KEPT Rate", fmt_subheader)
             current_row = low_start_row + 2
             for row in low_performers:
                 monthly_ws.write(current_row, 0, row["CMS User"], fmt_left)
-                monthly_ws.write_number(current_row, 1, float(row.get("PTP Rate") or 0.0), fmt_pct)
-                monthly_ws.write_number(current_row, 2, float(row.get("KEPT Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 1, float(row.get("RPC Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 2, float(row.get("PTP Rate") or 0.0), fmt_pct)
+                monthly_ws.write_number(current_row, 3, float(row.get("KEPT Rate") or 0.0), fmt_pct)
                 current_row += 1
             if not low_performers:
-                monthly_ws.merge_range(current_row, 0, current_row, 2, "No low performers under the current KEPT threshold.", fmt_text)
+                monthly_ws.merge_range(current_row, 0, current_row, 3, "No agents met the current low-performer thresholds.", fmt_text)
                 current_row += 1
 
             notes_row = insights_row
-            notes_col = 4
+            notes_col = 5
             notes_end_col = max(notes_col + 4, notes_col + len(agent_columns))
             monthly_ws.merge_range(notes_row, notes_col, notes_row, notes_end_col, "Executive Summary", fmt_section)
             monthly_ws.write(notes_row + 1, notes_col, "Metric", fmt_text_header)
@@ -828,10 +867,23 @@ def build_workbook_bytes(export_rows, dates, summary_long):
             monthly_ws.merge_range(notes_row + 4, notes_col + 1, notes_row + 4, notes_end_col, f"{middle_count} agent(s) - {middle_count / total_agents:.1%}", fmt_text)
             monthly_ws.write(notes_row + 5, notes_col, "Low Performers", fmt_text_header)
             monthly_ws.merge_range(notes_row + 5, notes_col + 1, notes_row + 5, notes_end_col, f"{low_count} agent(s) - {low_count / total_agents:.1%}", fmt_text)
-            monthly_ws.write(notes_row + 6, notes_col, "Summary", fmt_text_header)
-            monthly_ws.merge_range(notes_row + 6, notes_col + 1, notes_row + 10, notes_end_col, "\n".join(summary_lines), fmt_text)
+            monthly_ws.write(notes_row + 6, notes_col, "Thresholds", fmt_text_header)
+            monthly_ws.merge_range(
+                notes_row + 6,
+                notes_col + 1,
+                notes_row + 8,
+                notes_end_col,
+                (
+                    f"High: RPC >= {HIGH_RPC_THRESHOLD:.0%}, PTP >= {HIGH_PTP_THRESHOLD:.0%}, KEPT >= {HIGH_KEPT_THRESHOLD:.0%}\n"
+                    f"Mid: not High and not Low\n"
+                    f"Low: RPC < {LOW_RPC_THRESHOLD:.0%} or PTP < {LOW_PTP_THRESHOLD:.0%} or KEPT < {LOW_KEPT_THRESHOLD:.0%}"
+                ),
+                fmt_text,
+            )
+            monthly_ws.write(notes_row + 9, notes_col, "Summary", fmt_text_header)
+            monthly_ws.merge_range(notes_row + 9, notes_col + 1, notes_row + 13, notes_end_col, "\n".join(summary_lines), fmt_text)
 
-            action_row = notes_row + 12
+            action_row = notes_row + 15
             monthly_ws.merge_range(action_row, notes_col, action_row, notes_end_col, "Action Plan", fmt_section)
             for offset, (label, text) in enumerate(action_plan_rows, start=1):
                 monthly_ws.write(action_row + offset, notes_col, label, fmt_text_header)
@@ -859,26 +911,26 @@ with st.container():
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="activity_files",
-            help="Multiple files allowed. CSV is fastest. Only the 8 required activity columns are read for speed. Max 500MB per file.",
+            help="Multiple files allowed. CSV is fastest. Only the 8 required activity columns are read for speed.",
         )
         cms_reference_file = st.file_uploader(
             "2. Upload Agent Reference to be Include in Report",
             type=["xlsx", "xls", "csv"],
             key="cms_reference_file",
-            help="Columns: Name, CMS User, Placement. Max 500MB.",
+            help="Columns: Name, CMS User, Placement",
         )
     with col2:
         target_reference_file = st.file_uploader(
             "3. Upload target reference",
             type=["xlsx", "xls", "csv"],
             key="target_reference_file",
-            help="Columns: Placement, Connected Calls Target, RPC Target, RPC OB Target, PTP Target, PTP OB Target, Kept Target, KEPT OB Target. Max 500MB.",
+            help="Columns: Placement, Connected Calls Target, RPC Target, RPC OB Target, PTP Target, PTP OB Target, Kept Target, KEPT OB Target",
         )
         old_ic_reference_file = st.file_uploader(
             "4. Upload Masterfile reference",
             type=["xlsx", "xls", "csv"],
             key="old_ic_reference_file",
-            help="Columns: Old IC, Placement, Principal. Max 500MB.",
+            help="Columns: Old IC, Placement, Principal",
         )
 
 
